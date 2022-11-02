@@ -9,8 +9,20 @@ fn main() {
     println!("{}", ref3.to_uppercase());
 }
 ```
-
-
+答：不能编译。
+在存在引用 ref3 的情况下，希望获得s的可变引用 s = String::from("goodbye") 会引发编译错误。
+避免数据竞争：在同一时刻，只能存在一个“写”（可变引用）或多个“读”（不可变引用）。
+可修改为：
+```
+fn main() {
+    let mut s = String::from("hello");
+    let ref1 = &s;
+    let ref2 = &ref1;
+    let ref3 = &ref2;
+    println!("{}", ref3.to_uppercase());
+    s = String::from("goodbye");
+}
+```
 
 Example 2:
 ```
@@ -19,8 +31,15 @@ fn drip_drop() -> &String {
     return &s;
 }
 ```
-
-
+答：不能编译。
+s在离开其作用域（函数 drip_drop ）后会被释放（Rust 会自动调用 drop 函数并清理变量的堆内存），返回的引用 &s 失去了其本应该引用的值。
+可修改为：
+```
+fn drip_drop() -> String {
+    let s = String::from("hello world!");
+    return s;
+}
+```
 
 Example 3:
 ```
@@ -29,6 +48,20 @@ fn main() {
     let mut v = Vec::new();
     v.push(s1);
     let s2: String = v[0];
+    println!("{}", s2);
+}
+```
+答：不能编译。
+v[0]是*vec.index(idx)的语法糖，得到的是向量元素本身（在此处为String类型的“hello”）。
+let s2: String = v[0] 把v[0]的所有权移交给s2，而Vec是不允许留下这样一个“空洞”的。至于为什么不允许，有待后续学习……
+该问题可参考 Why can’t move element of Vector? https://users.rust-lang.org/t/why-cant-move-element-of-vector/30454/5 
+可修改为：
+```
+fn main() {
+    let s1 = String::from("hello");
+    let mut v = Vec::new();
+    v.push(s1);
+    let s2: &String = &v[0];
     println!("{}", s2);
 }
 ```
