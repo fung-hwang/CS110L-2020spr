@@ -1,14 +1,11 @@
 use std::collections::VecDeque;
-#[allow(unused_imports)]
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-#[allow(unused_imports)]
 use std::{env, process, thread};
 
 /// Determines whether a number is prime. This function is taken from CS 110 factor.py.
 ///
 /// You don't need to read or understand this code.
-#[allow(dead_code)]
 fn is_prime(num: u32) -> bool {
     if num <= 1 {
         return false;
@@ -25,7 +22,6 @@ fn is_prime(num: u32) -> bool {
 /// from CS 110 factor.py.
 ///
 /// You don't need to read or understand this code.
-#[allow(dead_code)]
 fn factor_number(num: u32) {
     let start = Instant::now();
 
@@ -52,7 +48,6 @@ fn factor_number(num: u32) {
 }
 
 /// Returns a list of numbers supplied via argv.
-#[allow(dead_code)]
 fn get_input_numbers() -> VecDeque<u32> {
     let mut numbers = VecDeque::new();
     for arg in env::args().skip(1) {
@@ -66,17 +61,42 @@ fn get_input_numbers() -> VecDeque<u32> {
     numbers
 }
 
+/// a helper function that pops a number from the front of the queue
+fn get_number(numbers: &Mutex<VecDeque<u32>>) -> Option<u32> {
+    let mut numbers = numbers.lock().unwrap();
+    numbers.pop_front()
+}
+
 fn main() {
     let num_threads = num_cpus::get();
     println!("Farm starting on {} CPUs", num_threads);
     let start = Instant::now();
 
-    // TODO: call get_input_numbers() and store a queue of numbers to factor
+    // call get_input_numbers() and store a queue of numbers to factor
+    let input_numbers = Arc::new(Mutex::new(get_input_numbers()));
 
-    // TODO: spawn `num_threads` threads, each of which pops numbers off the queue and calls
-    // factor_number() until the queue is empty
+    let mut handles = vec![];
+    // spawn `num_threads` threads, each of which pops numbers off the queue and
+    // calls factor_number() until the queue is empty
+    for _ in 0..num_threads {
+        let input_numbers = Arc::clone(&input_numbers);
+        let handle = thread::spawn(move || loop {
+            match get_number(&input_numbers) {
+                Some(number) => {
+                    factor_number(number);
+                }
+                None => {
+                    break;
+                }
+            }
+        });
+        handles.push(handle);
+    }
 
-    // TODO: join all the threads you created
+    // join all the threads you created
+    for handle in handles {
+        handle.join().unwrap();
+    }
 
     println!("Total execution time: {:?}", start.elapsed());
 }
