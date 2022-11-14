@@ -8,7 +8,42 @@ where
     U: Send + 'static + Default,
 {
     let mut output_vec: Vec<U> = Vec::with_capacity(input_vec.len());
-    // TODO: implement parallel map!
+    output_vec.resize_with(input_vec.len(), Default::default); // need to init the elements
+
+    let mut handles = Vec::new();
+    let (s1, r1) = crossbeam_channel::unbounded(); // channel_1: thread main -> thread n
+    let (s2, r2) = crossbeam_channel::unbounded(); // channel_2: thread n -> thread main
+    for (idx, val) in input_vec.into_iter().enumerate() {
+        // send val and its index of input_vec to thread n by channel_1
+        // Type: (idx, val)
+        s1.send((idx, val)).unwrap();
+    }
+    drop(s1);
+    // thread n
+    for _ in 0..num_threads {
+        let r = r1.clone();
+        let s2 = s2.clone();
+        let handle = thread::spawn(move || {
+            // receive (idx, val) from thread main, execute f
+            // and send (idx, f(val)) to thread main by channel_2
+            while let Ok((idx, val)) = r.recv() {
+                s2.send((idx, f(val))).unwrap();
+            }
+        });
+        handles.push(handle);
+    }
+
+    drop(s2); // important!
+
+    // receive (idx, f(val)) from thread n by channel_2
+    while let Ok((idx, val)) = r2.recv() {
+        *output_vec.get_mut(idx).unwrap() = val;
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
     output_vec
 }
 
