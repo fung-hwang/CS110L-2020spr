@@ -2,6 +2,7 @@ use crossbeam_channel;
 use std::{thread, time};
 
 fn parallel_map<T, U, F>(mut input_vec: Vec<T>, num_threads: usize, f: F) -> Vec<U>
+// Is "mut" in "mut input_vec: Vec<T>" necessary?
 where
     F: FnOnce(T) -> U + Send + Copy + 'static,
     T: Send + 'static,
@@ -21,12 +22,12 @@ where
     drop(s1);
     // thread n
     for _ in 0..num_threads {
-        let r = r1.clone();
+        let r1 = r1.clone();
         let s2 = s2.clone();
         let handle = thread::spawn(move || {
             // receive (idx, val) from thread main, execute f
             // and send (idx, f(val)) to thread main by channel_2
-            while let Ok((idx, val)) = r.recv() {
+            while let Ok((idx, val)) = r1.recv() {
                 s2.send((idx, f(val))).unwrap();
             }
         });
@@ -41,7 +42,7 @@ where
     }
 
     for handle in handles {
-        handle.join().unwrap();
+        handle.join().expect("join thread failed");
     }
 
     output_vec
