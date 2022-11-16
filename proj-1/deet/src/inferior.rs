@@ -45,10 +45,17 @@ impl Inferior {
             Err(_) => None,
         }
     }
-
+    
+    /// Wake up the inferior and wait for it to finish.
     pub fn continue_exec(&self) -> Result<Status, nix::Error> {
         ptrace::cont(self.pid(), None)?; // Restart the stopped tracee process
         self.wait(None)
+    }
+    
+    /// Kill the inferior(child process).
+    pub fn kill(&mut self) -> Result<(), std::io::Error> {
+        println!("Killing running inferior (pid {})", self.pid());
+        self.child.kill()
     }
 
     /// Returns the pid of this inferior.
