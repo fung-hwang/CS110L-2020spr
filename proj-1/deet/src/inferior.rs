@@ -4,6 +4,8 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
+use crate::dwarf_data::DwarfData;
+use std::convert::TryInto;
 
 pub enum Status {
     /// Indicates inferior stopped. Contains the signal that stopped the process, as well as the
@@ -32,6 +34,13 @@ pub struct Inferior {
 }
 
 impl Inferior {
+    pub fn print_backtrace(&self, debug_data: &DwarfData) -> Result<(), nix::Error> {
+        let regs = ptrace::getregs(self.pid()).unwrap(); // TODO
+        println!("{} ({})", debug_data.get_function_from_addr(regs.rip.try_into().unwrap()).unwrap(), debug_data.get_line_from_addr(regs.rip.try_into().unwrap()).unwrap());
+        
+        Ok(())
+    }
+
     /// Attempts to start a new inferior process. Returns Some(Inferior) if successful, or None if
     /// an error is encountered.
     pub fn new(target: &str, args: &Vec<String>) -> Option<Inferior> {

@@ -2,18 +2,31 @@ use crate::debugger_command::DebuggerCommand;
 use crate::inferior::{Inferior, Status};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use crate::dwarf_data::{DwarfData, Error as DwarfError};
 
 pub struct Debugger {
     target: String,
     history_path: String,
     readline: Editor<()>,
     inferior: Option<Inferior>,
+    debug_data: DwarfData,
 }
 
 impl Debugger {
     /// Initializes the debugger.
     pub fn new(target: &str) -> Debugger {
-        // TODO (milestone 3): initialize the DwarfData
+        // Load the target executable file to initialize the DwarfData
+        let debug_data = match DwarfData::from_file(target) {
+            Ok(val) => val,
+            Err(DwarfError::ErrorOpeningFile) => {
+                println!("Could not open file {}", target);
+                std::process::exit(1);
+            }
+            Err(DwarfError::DwarfFormatError(err)) => {
+                println!("Could not debugging symbols from {}: {:?}", target, err);
+                std::process::exit(1);
+            }
+        };
 
         let history_path = format!("{}/.deet_history", std::env::var("HOME").unwrap());
         let mut readline = Editor::<()>::new();
@@ -25,40 +38,19 @@ impl Debugger {
             history_path,
             readline,
             inferior: None,
+            debug_data,
         }
     }
     
-    /// When continue command is typed, we should continue the inferior
-    /// call inferior.continue_exec() and handle the Result
-    pub fn inferior_continue_exec(&mut self) {
-        if let Some(inferior) = &self.inferior {
-            match inferior.continue_exec() {
-                Ok(status) => match status {
-                    Status::Exited(exit_status_code) => {
-                        self.inferior = None;
-                        println!("Child exited (status {})", exit_status_code);
-                    }
-                    Status::Signaled(signal) => {
-                        self.inferior = None;
-                        println!("Child exited (signal {})", signal);
-                    }
-                    Status::Stopped(signal, _) => {
-                        println!("Child stopped (signal {})", signal)
-                    }
-                },
-                Err(err) => println!(
-                    "Inferior can't be woken up and execute: {}",
-                    err
-                ),
-            } 
-        } else {
-            println!("inferior_continue_exec failed: there is no inferior");
-        }
-    }
-
     pub fn run(&mut self) {
         loop {
             match self.get_next_command() {
+                DebuggerCommand::Backtrace => {
+                    // TODO
+                    if let Some(inferior) = &self.inferior {
+                        inferior.print_backtrace(&self.debug_data).unwrap();
+                    }
+                }
                 DebuggerCommand::Continue => {
                     if let Some(_) = &self.inferior {
                         self.inferior_continue_exec();
@@ -91,6 +83,34 @@ impl Debugger {
                     return;
                 }
             }
+        }
+    }
+
+    /// When continue command is typed, we should continue the inferior
+    /// call inferior.continue_exec() and handle the Result
+    fn inferior_continue_exec(&mut self) {
+        if let Some(inferior) = &self.inferior {
+            match inferior.continue_exec() {
+                Ok(status) => match status {
+                    Status::Exited(exit_status_code) => {
+                        self.inferior = None;
+                        println!("Child exited (status {})", exit_status_code);
+                    }
+                    Status::Signaled(signal) => {
+                        self.inferior = None;
+                        println!("Child exited (signal {})", signal);
+                    }
+                    Status::Stopped(signal, _) => {
+                        println!("Child stopped (signal {})", signal)
+                    }
+                },
+                Err(err) => println!(
+                    "Inferior can't be woken up and execute: {}",
+                    err
+                ),
+            } 
+        } else {
+            println!("inferior_continue_exec failed: there is no inferior");
         }
     }
 
