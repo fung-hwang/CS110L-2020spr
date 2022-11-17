@@ -1,8 +1,8 @@
 use crate::debugger_command::DebuggerCommand;
+use crate::dwarf_data::{DwarfData, Error as DwarfError};
 use crate::inferior::{Inferior, Status};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
-use crate::dwarf_data::{DwarfData, Error as DwarfError};
 
 pub struct Debugger {
     target: String,
@@ -41,29 +41,30 @@ impl Debugger {
             debug_data,
         }
     }
-    
+
     pub fn run(&mut self) {
         loop {
             match self.get_next_command() {
                 DebuggerCommand::Backtrace => {
-                    // TODO
                     if let Some(inferior) = &self.inferior {
-                        inferior.print_backtrace(&self.debug_data).unwrap();
+                        if let Err(err) = inferior.print_backtrace(&self.debug_data) {
+                            println!("Err print_backtrace: {}", err);
+                        }
                     }
                 }
                 DebuggerCommand::Continue => {
                     if let Some(_) = &self.inferior {
                         self.inferior_continue_exec();
                     } else {
-                        // continue when there is no inferior 
+                        // continue when there is no inferior
                         println!("There is no inferior running");
-                    } 
+                    }
                 }
                 DebuggerCommand::Run(args) => {
                     // If type run when there exists inferior, kill the child process.
                     if let Some(inferior) = &mut self.inferior {
-                        inferior.kill().expect("inferior.kill wasn't running"); 
-                    } 
+                        inferior.kill().expect("inferior.kill wasn't running");
+                    }
                     if let Some(inferior) = Inferior::new(&self.target, &args) {
                         // Create the inferior
                         self.inferior = Some(inferior);
@@ -76,9 +77,9 @@ impl Debugger {
                     }
                 }
                 DebuggerCommand::Quit => {
-                    // if there exists inferior, kill the child process 
+                    // if there exists inferior, kill the child process
                     if let Some(inferior) = &mut self.inferior {
-                        inferior.kill().expect("inferior.kill wasn't running"); 
+                        inferior.kill().expect("inferior.kill wasn't running");
                     }
                     return;
                 }
@@ -100,15 +101,13 @@ impl Debugger {
                         self.inferior = None;
                         println!("Child exited (signal {})", signal);
                     }
-                    Status::Stopped(signal, _) => {
-                        println!("Child stopped (signal {})", signal)
+                    Status::Stopped(signal, rip) => {
+                        println!("Child stopped (signal {})", signal);
+                        println!("Stopped at {}", self.debug_data.get_line_from_addr(rip).unwrap());
                     }
                 },
-                Err(err) => println!(
-                    "Inferior can't be woken up and execute: {}",
-                    err
-                ),
-            } 
+                Err(err) => println!("Inferior can't be woken up and execute: {}", err),
+            }
         } else {
             println!("inferior_continue_exec failed: there is no inferior");
         }

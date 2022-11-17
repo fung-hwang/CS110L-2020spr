@@ -1,11 +1,11 @@
+use crate::dwarf_data::DwarfData;
 use nix::sys::ptrace;
 use nix::sys::signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
+use std::convert::TryInto;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
-use crate::dwarf_data::DwarfData;
-use std::convert::TryInto;
 
 pub enum Status {
     /// Indicates inferior stopped. Contains the signal that stopped the process, as well as the
@@ -35,9 +35,20 @@ pub struct Inferior {
 
 impl Inferior {
     pub fn print_backtrace(&self, debug_data: &DwarfData) -> Result<(), nix::Error> {
-        let regs = ptrace::getregs(self.pid()).unwrap(); // TODO
-        println!("{} ({})", debug_data.get_function_from_addr(regs.rip.try_into().unwrap()).unwrap(), debug_data.get_line_from_addr(regs.rip.try_into().unwrap()).unwrap());
-        
+        let regs = ptrace::getregs(self.pid())?;
+        let mut instruction_ptr: usize = regs.rip.try_into().unwrap();
+        let mut base_ptr: usize = regs.rbp.try_into().unwrap();
+        loop {
+            let function = debug_data.get_function_from_addr(instruction_ptr).unwrap();
+            let line = debug_data.get_line_from_addr(instruction_ptr).unwrap();
+            println!("{} ({})", function, line);
+            if function == "main" {
+                break;
+            }
+            instruction_ptr =
+                ptrace::read(self.pid(), (base_ptr + 8) as ptrace::AddressType)? as usize;
+            base_ptr = ptrace::read(self.pid(), base_ptr as ptrace::AddressType)? as usize;
+        }
         Ok(())
     }
 
@@ -54,13 +65,13 @@ impl Inferior {
             Err(_) => None,
         }
     }
-    
+
     /// Wake up the inferior and wait for it to finish.
     pub fn continue_exec(&self) -> Result<Status, nix::Error> {
         ptrace::cont(self.pid(), None)?; // Restart the stopped tracee process
         self.wait(None)
     }
-    
+
     /// Kill the inferior(child process).
     pub fn kill(&mut self) -> Result<(), std::io::Error> {
         println!("Killing running inferior (pid {})", self.pid());
