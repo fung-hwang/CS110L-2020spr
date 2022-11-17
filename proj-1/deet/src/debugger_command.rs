@@ -3,11 +3,13 @@ pub enum DebuggerCommand {
     Run(Vec<String>),
     Continue,
     Backtrace,
+    Breakpoint(String),
 }
 
 impl DebuggerCommand {
     pub fn from_tokens(tokens: &Vec<&str>) -> Option<DebuggerCommand> {
         match tokens[0] {
+            "b" | "break" => Some(DebuggerCommand::Breakpoint(tokens[1].to_string())),
             "bt" | "back" | "backtrace" => Some(DebuggerCommand::Backtrace),
             "c" | "cont" | "continue" => Some(DebuggerCommand::Continue),
             "q" | "quit" => Some(DebuggerCommand::Quit),

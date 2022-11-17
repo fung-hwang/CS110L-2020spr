@@ -4,12 +4,31 @@ use crate::inferior::{Inferior, Status};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
+/// parse a usize from a hexadecimal string
+fn parse_address(addr: &str) -> Option<usize> {
+    // TODO(milestore 6): update this code to take different kinds of breakpoints
+    // ensure the addr starts with "*"
+    let addr = if addr.to_lowercase().starts_with("*") {
+        &addr[1..]
+    } else {
+        &addr
+    };
+    let addr_without_0x = if addr.to_lowercase().starts_with("0x") {
+        &addr[2..]
+    } else {
+        &addr
+    };
+    // println!("addr = {}", addr);
+    usize::from_str_radix(addr_without_0x, 16).ok()
+}
+
 pub struct Debugger {
     target: String,
     history_path: String,
     readline: Editor<()>,
     inferior: Option<Inferior>,
     debug_data: DwarfData,
+    breakpoints: Vec<usize>,
 }
 
 impl Debugger {
@@ -27,6 +46,7 @@ impl Debugger {
                 std::process::exit(1);
             }
         };
+        debug_data.print();
 
         let history_path = format!("{}/.deet_history", std::env::var("HOME").unwrap());
         let mut readline = Editor::<()>::new();
@@ -39,12 +59,23 @@ impl Debugger {
             readline,
             inferior: None,
             debug_data,
+            breakpoints: vec![],
         }
     }
+
 
     pub fn run(&mut self) {
         loop {
             match self.get_next_command() {
+                DebuggerCommand::Breakpoint(breakpoint) => {
+                    match parse_address(&breakpoint) {
+                        Some(addr_usize) => { 
+                            println!("Set breakpoint {} at {}", self.breakpoints.len(), addr_usize);
+                            self.breakpoints.push(addr_usize);
+                        }
+                        None => println!("fail to parse a usize from a hexadecimal string"),
+                    }
+                }
                 DebuggerCommand::Backtrace => {
                     if let Some(inferior) = &self.inferior {
                         if let Err(err) = inferior.print_backtrace(&self.debug_data) {
@@ -65,7 +96,7 @@ impl Debugger {
                     if let Some(inferior) = &mut self.inferior {
                         inferior.kill().expect("inferior.kill wasn't running");
                     }
-                    if let Some(inferior) = Inferior::new(&self.target, &args) {
+                    if let Some(inferior) = Inferior::new(&self.target, &args, &self.breakpoints) {
                         // Create the inferior
                         self.inferior = Some(inferior);
                         // milestone 1: make the inferior run
@@ -153,4 +184,4 @@ impl Debugger {
             }
         }
     }
-}
+} // impl
