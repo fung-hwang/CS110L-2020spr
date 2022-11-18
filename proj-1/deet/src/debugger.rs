@@ -56,33 +56,42 @@ impl Debugger {
         loop {
             match self.get_next_command() {
                 DebuggerCommand::Breakpoint(bp_target) => {
-                    // ensure addr starts with "*"
-                    if !bp_target.starts_with("*") {
-                        println!("Usage: b|break|breakpoint *address");
+                    let addr: usize;
+                    if bp_target.starts_with("*") {
+                        addr = Self::parse_address(&bp_target[1..]).unwrap();
+                    } else if let Ok(line_number) = bp_target.parse::<usize>() {
+                        if let Some(address) = self.debug_data.get_addr_for_line(None, line_number)
+                        {
+                            addr = address;
+                        } else {
+                            println!("line number can't find the corresponding address");
+                            continue;
+                        }
+                    } else if let Some(address) =
+                        self.debug_data.get_addr_for_function(None, &bp_target)
+                    {
+                        addr = address;
+                    } else {
+                        println!("{} can't be parsed to a breakpoint target", bp_target);
+                        println!("Usage: b|break|breakpoint *address|line|func");
                         continue;
                     }
-                    match Self::parse_address(&bp_target[1..]) {
-                        Some(addr) => {
-                            println!(
-                                "Set breakpoint {} at {}",
-                                self.breakpoints.len(),
-                                addr
-                            );
-                            // If there exits inferior, we should get orig_byte of new breakpoints
-                            // and insert HashMap
-                            if let Some(inferior) = &mut self.inferior {
-                                match inferior.write_byte(addr, 0xcc) {
-                                    Ok(orig_byte) => {
-                                        self.breakpoints.insert(addr, Some(Breakpoint{addr, orig_byte}));
-                                    }
-                                    Err(err) => println!("[Debugger::new breakpoint write_byte: {}", err)
-                                }
+
+                    println!("Set breakpoint {} at {}", self.breakpoints.len(), addr);
+                    // If there exits inferior, we should get orig_byte of new breakpoints
+                    // and insert HashMap
+                    if let Some(inferior) = &mut self.inferior {
+                        match inferior.write_byte(addr, 0xcc) {
+                            Ok(orig_byte) => {
+                                self.breakpoints
+                                    .insert(addr, Some(Breakpoint { addr, orig_byte }));
                             }
-                            else {
-                                self.breakpoints.insert(addr, None);
+                            Err(err) => {
+                                println!("Debugger::new breakpoint write_byte: {}", err)
                             }
                         }
-                        None => println!("fail to parse a usize from a hexadecimal string"),
+                    } else {
+                        self.breakpoints.insert(addr, None);
                     }
                 }
                 DebuggerCommand::Backtrace => {
