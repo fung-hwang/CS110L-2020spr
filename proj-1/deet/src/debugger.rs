@@ -3,23 +3,12 @@ use crate::dwarf_data::{DwarfData, Error as DwarfError};
 use crate::inferior::{Inferior, Status};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use std::collections::HashMap;
 
-/// parse a usize from a hexadecimal string
-fn parse_address(addr: &str) -> Option<usize> {
-    // TODO(milestore 6): update this code to take different kinds of breakpoints
-    // ensure the addr starts with "*"
-    let addr = if addr.to_lowercase().starts_with("*") {
-        &addr[1..]
-    } else {
-        &addr
-    };
-    let addr_without_0x = if addr.to_lowercase().starts_with("0x") {
-        &addr[2..]
-    } else {
-        &addr
-    };
-    // println!("addr = {}", addr);
-    usize::from_str_radix(addr_without_0x, 16).ok()
+#[derive(Clone)]
+pub struct Breakpoint {
+    pub addr: usize,
+    pub orig_byte: u8,
 }
 
 pub struct Debugger {
@@ -28,7 +17,7 @@ pub struct Debugger {
     readline: Editor<()>,
     inferior: Option<Inferior>,
     debug_data: DwarfData,
-    breakpoints: Vec<usize>,
+    breakpoints: HashMap<usize, Option<Breakpoint>>,
 }
 
 impl Debugger {
@@ -59,19 +48,39 @@ impl Debugger {
             readline,
             inferior: None,
             debug_data,
-            breakpoints: vec![],
+            breakpoints: HashMap::new(),
         }
     }
-
 
     pub fn run(&mut self) {
         loop {
             match self.get_next_command() {
-                DebuggerCommand::Breakpoint(breakpoint) => {
-                    match parse_address(&breakpoint) {
-                        Some(addr_usize) => { 
-                            println!("Set breakpoint {} at {}", self.breakpoints.len(), addr_usize);
-                            self.breakpoints.push(addr_usize);
+                DebuggerCommand::Breakpoint(bp_target) => {
+                    // ensure addr starts with "*"
+                    if !bp_target.starts_with("*") {
+                        println!("Usage: b|break|breakpoint *address");
+                        continue;
+                    }
+                    match Self::parse_address(&bp_target[1..]) {
+                        Some(addr) => {
+                            println!(
+                                "Set breakpoint {} at {}",
+                                self.breakpoints.len(),
+                                addr
+                            );
+                            // If there exits inferior, we should get orig_byte of new breakpoints
+                            // and insert HashMap
+                            if let Some(inferior) = &mut self.inferior {
+                                match inferior.write_byte(addr, 0xcc) {
+                                    Ok(orig_byte) => {
+                                        self.breakpoints.insert(addr, Some(Breakpoint{addr, orig_byte}));
+                                    }
+                                    Err(err) => println!("[Debugger::new breakpoint write_byte: {}", err)
+                                }
+                            }
+                            else {
+                                self.breakpoints.insert(addr, None);
+                            }
                         }
                         None => println!("fail to parse a usize from a hexadecimal string"),
                     }
@@ -85,7 +94,7 @@ impl Debugger {
                 }
                 DebuggerCommand::Continue => {
                     if let Some(_) = &self.inferior {
-                        self.inferior_continue_exec();
+                        self.inferior_continue_exec(&mut self.breakpoints.clone());
                     } else {
                         // continue when there is no inferior
                         println!("There is no inferior running");
@@ -96,13 +105,15 @@ impl Debugger {
                     if let Some(inferior) = &mut self.inferior {
                         inferior.kill().expect("inferior.kill wasn't running");
                     }
-                    if let Some(inferior) = Inferior::new(&self.target, &args, &self.breakpoints) {
+                    if let Some(inferior) =
+                        Inferior::new(&self.target, &args, &mut self.breakpoints)
+                    {
                         // Create the inferior
                         self.inferior = Some(inferior);
                         // milestone 1: make the inferior run
                         // You may use self.inferior.as_mut().unwrap() to get a mutable reference
                         // to the Inferior object
-                        self.inferior_continue_exec();
+                        self.inferior_continue_exec(&mut self.breakpoints.clone());
                     } else {
                         println!("Error starting subprocess");
                     }
@@ -116,13 +127,24 @@ impl Debugger {
                 }
             }
         }
+    } // run
+
+    /// parse a usize from a hexadecimal string
+    fn parse_address(addr: &str) -> Option<usize> {
+        let addr_without_0x = if addr.to_lowercase().starts_with("0x") {
+            &addr[2..]
+        } else {
+            &addr
+        };
+        // println!("addr = {}", addr);
+        usize::from_str_radix(addr_without_0x, 16).ok()
     }
 
     /// When continue command is typed, we should continue the inferior
     /// call inferior.continue_exec() and handle the Result
-    fn inferior_continue_exec(&mut self) {
-        if let Some(inferior) = &self.inferior {
-            match inferior.continue_exec() {
+    fn inferior_continue_exec(&mut self, breakpoints: &mut HashMap<usize, Option<Breakpoint>>) {
+        if let Some(inferior) = &mut self.inferior {
+            match inferior.continue_exec(breakpoints) {
                 Ok(status) => match status {
                     Status::Exited(exit_status_code) => {
                         self.inferior = None;
@@ -134,7 +156,10 @@ impl Debugger {
                     }
                     Status::Stopped(signal, rip) => {
                         println!("Child stopped (signal {})", signal);
-                        println!("Stopped at {}", self.debug_data.get_line_from_addr(rip).unwrap());
+                        println!(
+                            "Stopped at {}",
+                            self.debug_data.get_line_from_addr(rip).unwrap()
+                        );
                     }
                 },
                 Err(err) => println!("Inferior can't be woken up and execute: {}", err),
