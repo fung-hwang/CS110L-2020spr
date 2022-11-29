@@ -1,5 +1,5 @@
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 const MAX_HEADERS_SIZE: usize = 8000;
 const MAX_BODY_SIZE: usize = 10000000;
@@ -80,7 +80,7 @@ fn parse_response(buffer: &[u8]) -> Result<Option<(http::Response<Vec<u8>>, usiz
 /// Returns Ok(http::Response) if a valid response is received, or Error if not.
 ///
 /// You will need to modify this function in Milestone 2.
-fn read_headers(stream: &mut TcpStream) -> Result<http::Response<Vec<u8>>, Error> {
+async fn read_headers(stream: &mut TcpStream) -> Result<http::Response<Vec<u8>>, Error> {
     // Try reading the headers from the response. We may not receive all the headers in one shot
     // (e.g. we might receive the first few bytes of a response, and then the rest follows later).
     // Try parsing repeatedly until we read a valid HTTP response
@@ -90,6 +90,7 @@ fn read_headers(stream: &mut TcpStream) -> Result<http::Response<Vec<u8>>, Error
         // Read bytes from the connection into the buffer, starting at position bytes_read
         let new_bytes = stream
             .read(&mut response_buffer[bytes_read..])
+            .await
             .or_else(|err| Err(Error::ConnectionError(err)))?;
         if new_bytes == 0 {
             // We didn't manage to read a complete response
@@ -114,7 +115,10 @@ fn read_headers(stream: &mut TcpStream) -> Result<http::Response<Vec<u8>>, Error
 /// present, it reads that many bytes; otherwise, it reads bytes until the connection is closed.
 ///
 /// You will need to modify this function in Milestone 2.
-fn read_body(stream: &mut TcpStream, response: &mut http::Response<Vec<u8>>) -> Result<(), Error> {
+async fn read_body(
+    stream: &mut TcpStream,
+    response: &mut http::Response<Vec<u8>>,
+) -> Result<(), Error> {
     // The response may or may not supply a Content-Length header. If it provides the header, then
     // we want to read that number of bytes; if it does not, we want to keep reading bytes until
     // the connection is closed.
@@ -124,6 +128,7 @@ fn read_body(stream: &mut TcpStream, response: &mut http::Response<Vec<u8>>) -> 
         let mut buffer = [0_u8; 512];
         let bytes_read = stream
             .read(&mut buffer)
+            .await
             .or_else(|err| Err(Error::ConnectionError(err)))?;
         if bytes_read == 0 {
             // The server has hung up!
@@ -158,11 +163,11 @@ fn read_body(stream: &mut TcpStream, response: &mut http::Response<Vec<u8>>) -> 
 /// closes the connection prematurely or sends an invalid response.
 ///
 /// You will need to modify this function in Milestone 2.
-pub fn read_from_stream(
+pub async fn read_from_stream(
     stream: &mut TcpStream,
     request_method: &http::Method,
 ) -> Result<http::Response<Vec<u8>>, Error> {
-    let mut response = read_headers(stream)?;
+    let mut response = read_headers(stream).await?;
     // A response may have a body as long as it is not responding to a HEAD request and as long as
     // the response status code is not 1xx, 204 (no content), or 304 (not modified).
     if !(request_method == http::Method::HEAD
@@ -170,7 +175,7 @@ pub fn read_from_stream(
         || response.status() == http::StatusCode::NO_CONTENT
         || response.status() == http::StatusCode::NOT_MODIFIED)
     {
-        read_body(stream, &mut response)?;
+        read_body(stream, &mut response).await?;
     }
     Ok(response)
 }
@@ -178,20 +183,24 @@ pub fn read_from_stream(
 /// This function serializes a response to bytes and writes those bytes to the provided stream.
 ///
 /// You will need to modify this function in Milestone 2.
-pub fn write_to_stream(
+pub async fn write_to_stream(
     response: &http::Response<Vec<u8>>,
     stream: &mut TcpStream,
 ) -> Result<(), std::io::Error> {
-    stream.write(&format_response_line(response).into_bytes())?;
-    stream.write(&['\r' as u8, '\n' as u8])?; // \r\n
+    stream
+        .write(&format_response_line(response).into_bytes())
+        .await?;
+    stream.write(&['\r' as u8, '\n' as u8]).await?; // \r\n
     for (header_name, header_value) in response.headers() {
-        stream.write(&format!("{}: ", header_name).as_bytes())?;
-        stream.write(header_value.as_bytes())?;
-        stream.write(&['\r' as u8, '\n' as u8])?; // \r\n
+        stream
+            .write(&format!("{}: ", header_name).as_bytes())
+            .await?;
+        stream.write(header_value.as_bytes()).await?;
+        stream.write(&['\r' as u8, '\n' as u8]).await?; // \r\n
     }
-    stream.write(&['\r' as u8, '\n' as u8])?;
+    stream.write(&['\r' as u8, '\n' as u8]).await?;
     if response.body().len() > 0 {
-        stream.write(response.body())?;
+        stream.write(response.body()).await?;
     }
     Ok(())
 }
