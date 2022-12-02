@@ -91,15 +91,15 @@ async fn main() {
     };
 
     // Start active health check
-    let state_1 = state.clone();
+    let state_temp = state.clone();
     tokio::spawn(async move {
-        active_health_check(&state_1).await;
+        active_health_check(&state_temp).await;
     });
 
     // Start cleaning up rate limiting counter every minute
-    let state_2 = state.clone();
+    let state_temp = state.clone();
     tokio::spawn(async move {
-        rate_limiting_counter_clearer(&state_2).await;
+        rate_limiting_counter_clearer(&state_temp, 60).await;
     });
 
     // Handle incoming connections
@@ -114,9 +114,9 @@ async fn main() {
     }
 }
 
-async fn rate_limiting_counter_clearer(state: &ProxyState) {
+async fn rate_limiting_counter_clearer(state: &ProxyState, clear_interval: u64) {
     loop {
-        sleep(Duration::from_secs(60)).await;
+        sleep(Duration::from_secs(clear_interval)).await;
         // Clean up counter every minute
         let mut rate_limiting_counter = state.rate_limiting_counter.clone().lock_owned().await;
         rate_limiting_counter.clear();
@@ -132,6 +132,9 @@ async fn active_health_check(state: &ProxyState) {
 
         let mut live_upstream_addresses = state.live_upstream_addresses.write().await;
         live_upstream_addresses.clear();
+        // send a request to each upstream
+        // If a failed upstream returns HTTP 200, put it back in the rotation of upstream servers.
+        // If an online upstream returns a non-200 status code, mark that server as failed.
         for upstream_ip in &state.upstream_addresses {
             let request = http::Request::builder()
                 .method(http::Method::GET)
@@ -201,6 +204,7 @@ async fn connect_to_upstream(state: &ProxyState) -> Result<TcpStream, std::io::E
 
                 // All upstreams are dead, return Err
                 if live_upstream_addresses.len() == 0 {
+                    log::error!("All upstreams are dead");
                     return Err(Error::new(ErrorKind::Other, "All upstreams are dead"));
                 }
             }
@@ -219,6 +223,23 @@ async fn send_response(client_conn: &mut TcpStream, response: &http::Response<Ve
         log::warn!("Failed to send response to client: {}", error);
         return;
     }
+}
+
+async fn check_rate(state: &ProxyState, client_conn: &mut TcpStream) -> Result<(), std::io::Error> {
+    let client_ip = client_conn.peer_addr().unwrap().ip().to_string();
+    let mut rate_limiting_counter = state.rate_limiting_counter.clone().lock_owned().await;
+    let cnt = rate_limiting_counter.entry(client_ip).or_insert(0);
+    *cnt += 1;
+
+    if *cnt > state.max_requests_per_minute {
+        let response = response::make_http_error(http::StatusCode::TOO_MANY_REQUESTS);
+        // send_response(&mut client_conn, &response).await;
+        if let Err(error) = response::write_to_stream(&response, client_conn).await {
+            log::warn!("Failed to send response to client: {}", error);
+        }
+        return Err(Error::new(ErrorKind::Other, "Rate limiting"));
+    }
+    Ok(())
 }
 
 async fn handle_connection(mut client_conn: TcpStream, state: &ProxyState) {
@@ -275,16 +296,8 @@ async fn handle_connection(mut client_conn: TcpStream, state: &ProxyState) {
 
         // rate limiting
         if state.max_requests_per_minute > 0 {
-            let mut rate_limiting_counter = state.rate_limiting_counter.clone().lock_owned().await;
-            let cnt = rate_limiting_counter.entry(client_ip.clone()).or_insert(0);
-            *cnt += 1;
-
-            if *cnt > state.max_requests_per_minute {
-                let response = response::make_http_error(http::StatusCode::TOO_MANY_REQUESTS);
-                if let Err(error) = response::write_to_stream(&response, &mut client_conn).await {
-                    log::warn!("Failed to send response to client: {}", error);
-                    return;
-                }
+            if let Err(_error) = check_rate(&state, &mut client_conn).await {
+                log::error!("{} rate limiting", &client_ip);
                 continue;
             }
         }
