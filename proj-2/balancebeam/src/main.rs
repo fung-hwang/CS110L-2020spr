@@ -2,12 +2,14 @@ mod request;
 mod response;
 
 use clap::Parser;
+
 use rand::{Rng, SeedableRng};
+use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::sleep;
 
 /// Contains information parsed from the command-line invocation of balancebeam. The Clap macros
@@ -38,15 +40,18 @@ struct CmdOptions {
 /// You should add fields to this struct in later milestones.
 #[derive(Clone)]
 struct ProxyState {
+    /// How frequently we check whether upstream servers are alive
     active_health_check_interval: usize,
+    /// Where we should send requests when doing active health checks
     active_health_check_path: String,
-    /// Maximum number of requests an individual IP can make in a minute (Milestone 5)
-    #[allow(dead_code)]
+    /// Maximum number of requests an individual IP can make in a minute
     max_requests_per_minute: usize,
     /// Addresses of servers that we are proxying to
     upstream_addresses: Vec<String>,
-    /// Addresses of servers that can be connected
+    /// Addresses of servers that are alive
     live_upstream_addresses: Arc<RwLock<Vec<String>>>,
+    /// Rate limiting counter
+    rate_limiting_counter: Arc<Mutex<HashMap<String, usize>>>,
 }
 
 #[tokio::main]
@@ -82,12 +87,19 @@ async fn main() {
         active_health_check_interval: options.active_health_check_interval,
         active_health_check_path: options.active_health_check_path,
         max_requests_per_minute: options.max_requests_per_minute,
+        rate_limiting_counter: Arc::new(Mutex::new(HashMap::new())),
     };
 
     // Start active health check
-    let state_tmp = state.clone();
+    let state_1 = state.clone();
     tokio::spawn(async move {
-        active_health_check(&state_tmp).await;
+        active_health_check(&state_1).await;
+    });
+
+    // Start cleaning up rate limiting counter every minute
+    let state_2 = state.clone();
+    tokio::spawn(async move {
+        rate_limiting_counter_clearer(&state_2).await;
     });
 
     // Handle incoming connections
@@ -99,6 +111,15 @@ async fn main() {
                 handle_connection(stream, &state).await;
             });
         }
+    }
+}
+
+async fn rate_limiting_counter_clearer(state: &ProxyState) {
+    loop {
+        sleep(Duration::from_secs(60)).await;
+        // Clean up counter every minute
+        let mut rate_limiting_counter = state.rate_limiting_counter.clone().lock_owned().await;
+        rate_limiting_counter.clear();
     }
 }
 
@@ -251,6 +272,22 @@ async fn handle_connection(mut client_conn: TcpStream, state: &ProxyState) {
             upstream_ip,
             request::format_request_line(&request)
         );
+
+        // rate limiting
+        if state.max_requests_per_minute > 0 {
+            let mut rate_limiting_counter = state.rate_limiting_counter.clone().lock_owned().await;
+            let cnt = rate_limiting_counter.entry(client_ip.clone()).or_insert(0);
+            *cnt += 1;
+
+            if *cnt > state.max_requests_per_minute {
+                let response = response::make_http_error(http::StatusCode::TOO_MANY_REQUESTS);
+                if let Err(error) = response::write_to_stream(&response, &mut client_conn).await {
+                    log::warn!("Failed to send response to client: {}", error);
+                    return;
+                }
+                continue;
+            }
+        }
 
         // Add X-Forwarded-For header so that the upstream server knows the client's IP address.
         // (We're the ones connecting directly to the upstream server, so without this header, the
