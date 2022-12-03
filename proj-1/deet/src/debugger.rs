@@ -38,7 +38,7 @@ impl Debugger {
         debug_data.print();
 
         let history_path = format!("{}/.deet_history", std::env::var("HOME").unwrap());
-        let mut readline = Editor::<()>::new();
+        let mut readline = Editor::<()>::new().expect("Create Editor fail");
         // Attempt to load history from ~/.deet_history if it exists
         let _ = readline.load_history(&history_path);
 
@@ -165,10 +165,9 @@ impl Debugger {
                     }
                     Status::Stopped(signal, rip) => {
                         println!("Child stopped (signal {})", signal);
-                        println!(
-                            "Stopped at {}",
-                            self.debug_data.get_line_from_addr(rip).unwrap()
-                        );
+                        if let Some(line) = self.debug_data.get_line_from_addr(rip) {
+                            println!("Stopped at {}", line);
+                        }
                     }
                 },
                 Err(err) => println!("Inferior can't be woken up and execute: {}", err),

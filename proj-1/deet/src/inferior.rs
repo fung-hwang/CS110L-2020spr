@@ -48,11 +48,13 @@ impl Inferior {
         let orig_byte = (word >> 8 * byte_offset) & 0xff;
         let masked_word = word & !(0xff << 8 * byte_offset);
         let updated_word = masked_word | ((val as u64) << 8 * byte_offset);
-        ptrace::write(
-            self.pid(),
-            aligned_addr as ptrace::AddressType,
-            updated_word as *mut std::ffi::c_void,
-        )?;
+        unsafe {
+            ptrace::write(
+                self.pid(),
+                aligned_addr as ptrace::AddressType,
+                updated_word as *mut std::ffi::c_void,
+            )?;
+        }
         Ok(orig_byte as u8)
     }
 
@@ -115,7 +117,7 @@ impl Inferior {
     ) -> Result<Status, nix::Error> {
         let mut regs = ptrace::getregs(self.pid())?;
         let rip: usize = regs.rip.try_into().unwrap(); // rip as usize
-        // check if inferior stopped at a breakpoint
+                                                       // check if inferior stopped at a breakpoint
         if let Some(breakpoint) = breakpoints.get(&(rip - 1)) {
             if let Some(bp) = breakpoint {
                 let orig_byte = bp.orig_byte;
