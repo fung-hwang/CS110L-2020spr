@@ -7,7 +7,7 @@
 
 use gimli;
 use gimli::{UnitOffset, UnitSectionOffset};
-use object::Object;
+use object::{Object, ObjectSection};
 use std::borrow;
 //use std::io::{BufWriter, Write};
 use crate::dwarf_data::{File, Function, Line, Location, Type, Variable};
@@ -19,16 +19,19 @@ use std::{io, path};
 pub fn load_file(object: &object::File, endian: gimli::RunTimeEndian) -> Result<Vec<File>, Error> {
     // Load a section and return as `Cow<[u8]>`.
     let load_section = |id: gimli::SectionId| -> Result<borrow::Cow<[u8]>, gimli::Error> {
-        Ok(object
-            .section_data_by_name(id.name())
-            .unwrap_or(borrow::Cow::Borrowed(&[][..])))
+        match object.section_by_name(id.name()) {
+            Some(ref section) => Ok(section
+                .uncompressed_data()
+                .unwrap_or(borrow::Cow::Borrowed(&[][..]))),
+            None => Ok(borrow::Cow::Borrowed(&[][..])),
+        }
     };
     // Load a supplementary section. We don't have a supplementary object file,
     // so always return an empty slice.
-    let load_section_sup = |_| Ok(borrow::Cow::Borrowed(&[][..]));
+    // let load_section_sup = |_| Ok(borrow::Cow::Borrowed(&[][..]));
 
     // Load all of the sections.
-    let dwarf_cow = gimli::Dwarf::load(&load_section, &load_section_sup)?;
+    let dwarf_cow = gimli::Dwarf::load(&load_section)?;
 
     // Borrow a `Cow<[u8]>` to create an `EndianSlice`.
     let borrow_section: &dyn for<'a> Fn(
@@ -227,7 +230,11 @@ pub fn load_file(object: &object::File, endian: gimli::RunTimeEndian) -> Result<
 
                     // Determine line/column. DWARF line/column is never 0, so we use that
                     // but other applications may want to display this differently.
-                    let line = row.line().unwrap_or(0);
+                    let line = if let Some(line) = row.line() {
+                        line.get().try_into().unwrap()
+                    } else {
+                        0
+                    };
 
                     if let Some(file) = file {
                         file.lines.push(Line {
@@ -255,7 +262,7 @@ pub enum DebugValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     GimliError(gimli::Error),
-    Addr2lineError(addr2line::gimli::Error),
+    // Addr2lineError(addr2line::gimli::Error),
     ObjectError(String),
     IoError,
 }
@@ -266,11 +273,11 @@ impl From<gimli::Error> for Error {
     }
 }
 
-impl From<addr2line::gimli::Error> for Error {
-    fn from(err: addr2line::gimli::Error) -> Self {
-        Error::Addr2lineError(err)
-    }
-}
+// impl From<addr2line::gimli::Error> for Error {
+//     fn from(err: addr2line::gimli::Error) -> Self {
+//         Error::Addr2lineError(err)
+//     }
+// }
 
 impl From<io::Error> for Error {
     fn from(_: io::Error) -> Self {
@@ -349,7 +356,14 @@ fn get_attr_value<R: Reader>(
             write!(w, "0x{:08x}", value)?;
             dump_file_index(w, value, unit, dwarf)?;
             Ok(DebugValue::Str(w.to_string()))
-        }
+        },
+        gimli::AttributeValue::DebugLineStrRef(offset) => {
+            if let Ok(s) = dwarf.debug_line_str.get_str(offset) {
+                Ok(DebugValue::Str(format!("{}", s.to_string_lossy()?)))
+            } else {
+                Ok(DebugValue::Str(format!("<.debug_line_str+0x{:08x}>", offset.0)))
+            }
+        },
         _ => Ok(DebugValue::NoVal),
     }
 }
@@ -600,7 +614,10 @@ fn dump_op<R: Reader, W: Write>(
         | gimli::Operation::PushObjectAddress
         | gimli::Operation::TLS
         | gimli::Operation::CallFrameCFA
-        | gimli::Operation::StackValue => {}
+        | gimli::Operation::StackValue => {},
+        gimli::Operation::WasmGlobal { index: _ }
+        | gimli::Operation::WasmLocal { index: _ }
+        | gimli::Operation::WasmStack { index: _ } => {}
     };
     Ok(())
 }
