@@ -1,12 +1,6 @@
 # Project 1: The DEET Debugger
-nix = "0.26.2"
-libc = "0.2.139"
-rustyline = "11.0.0"
-gimli = "0.27.2"
-object = "0.30.3"
-memmap2 = "0.5.10"
-addr2line = "0.19.0"
-## 依赖适配 (2022.12.04)
+
+## 依赖适配 (2023.03.08)
 1. **nix** 
     + 0.17.0 -> 0.26.2
     + `nix::sys::ptrace::write` 变为了`unsafe`函数，需用`unsafe{}`包裹
