@@ -146,9 +146,10 @@ impl Inferior {
     }
 
     /// Kill the inferior(child process).
-    pub fn kill(&mut self) -> Result<(), std::io::Error> {
+    pub fn kill(&mut self) -> Result<Status, nix::Error> {
         println!("Killing running inferior (pid {})", self.pid());
-        self.child.kill()
+        self.child.kill().expect("inferior couldn't be killed");
+        self.wait(None)
     }
 
     /// Returns the pid of this inferior.
