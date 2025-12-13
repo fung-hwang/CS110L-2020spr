@@ -40,5 +40,5 @@ CS110L将带领我们学习 **Rust** ，这是一门注重 **安全、性能、�
 
 ## 写在最后
 1. Rust以学习曲线陡峭著称，不可否认，但也不必担心。我想，除了语言开发团队在语言的各种特性上的取舍与平衡，我们使用者也在付出和获得间取得平衡——更多的付出与更好的代码。
-2. [“Linux合入Rust代码”](https://en.wikipedia.org/wiki/Rust_for_Linux)已证明其能力，拭目以待 Rust 生态的发展 :)
+2. [“Linux合入Rust代码”](https://en.wikipedia.org/wiki/Rust_for_Linux)已证明其能力，拭目以待 Rust 生态的发展. Update: [“The (successful) end of the kernel Rust experiment”](https://lwn.net/Articles/1049831/)
 
