@@ -54,9 +54,15 @@ pub fn load_file(object: &object::File, endian: gimli::RunTimeEndian) -> Result<
 
         // Iterate over the Debugging Information Entries (DIEs) in the unit.
         let mut depth = 0;
+        let mut active_function: Option<(isize, usize)> = None;
         let mut entries = unit.entries();
         while let Some((delta_depth, entry)) = entries.next_dfs()? {
             depth += delta_depth;
+            if let Some((function_depth, _)) = active_function {
+                if depth <= function_depth {
+                    active_function = None;
+                }
+            }
             // Update the offset_to_type mapping for types
             // Update the variable list for formal params/variables
             match entry.tag() {
@@ -105,37 +111,60 @@ pub fn load_file(object: &object::File, endian: gimli::RunTimeEndian) -> Result<
                         .insert(type_offset, Type::new(name, byte_size.try_into().unwrap()));
                 }
                 gimli::DW_TAG_subprogram => {
-                    let mut func: Function = Default::default();
+                    let mut name = String::new();
+                    let mut address: Option<usize> = None;
+                    let mut high_pc: Option<HighPc> = None;
+                    let mut line_number = 0;
+                    let mut is_declaration = false;
                     let mut attrs = entry.attrs();
                     while let Some(attr) = attrs.next()? {
                         let val = get_attr_value(&attr, &unit, &dwarf);
                         //println!("   {}: {:?}", attr.name(), val);
                         match attr.name() {
                             gimli::DW_AT_name => {
-                                if let Ok(DebugValue::Str(name)) = val {
-                                    func.name = name;
+                                if let Ok(DebugValue::Str(attr_name)) = val {
+                                    name = attr_name;
                                 }
                             }
                             gimli::DW_AT_high_pc => {
-                                if let Ok(DebugValue::Uint(high_pc)) = val {
-                                    func.text_length = high_pc.try_into().unwrap();
-                                }
+                                high_pc = get_high_pc(&attr);
                             }
                             gimli::DW_AT_low_pc => {
                                 //println!("low pc {:?}", attr.value());
                                 if let Ok(DebugValue::Uint(low_pc)) = val {
-                                    func.address = low_pc.try_into().unwrap();
+                                    address = Some(low_pc.try_into().unwrap());
                                 }
                             }
                             gimli::DW_AT_decl_line => {
-                                if let Ok(DebugValue::Uint(line_number)) = val {
-                                    func.line_number = line_number.try_into().unwrap();
+                                if let Ok(DebugValue::Uint(num)) = val {
+                                    line_number = num.try_into().unwrap();
                                 }
                             }
+                            gimli::DW_AT_declaration => is_declaration = get_flag(&attr),
                             _ => {}
                         }
                     }
-                    compilation_units.last_mut().unwrap().functions.push(func);
+                    if !is_declaration {
+                        if let Some(address) = address {
+                            let text_length = match high_pc {
+                                Some(HighPc::Length(length)) => length,
+                                Some(HighPc::Address(end_addr)) => {
+                                    end_addr.checked_sub(address).unwrap_or(0)
+                                }
+                                None => 0,
+                            };
+                            let func = Function {
+                                name,
+                                address,
+                                text_length,
+                                line_number,
+                                variables: Vec::new(),
+                            };
+                            let functions = &mut compilation_units.last_mut().unwrap().functions;
+                            functions.push(func);
+                            active_function = Some((depth, functions.len() - 1));
+                        }
+                    }
                 }
                 gimli::DW_TAG_formal_parameter | gimli::DW_TAG_variable => {
                     let mut name = String::new();
@@ -185,12 +214,15 @@ pub fn load_file(object: &object::File, endian: gimli::RunTimeEndian) -> Result<
                                 .unwrap()
                                 .global_variables
                                 .push(var);
-                        } else if depth > 1 {
+                        } else if let Some((function_depth, function_index)) = active_function {
+                            if depth <= function_depth {
+                                continue;
+                            }
                             compilation_units
                                 .last_mut()
                                 .unwrap()
                                 .functions
-                                .last_mut()
+                                .get_mut(function_index)
                                 .unwrap()
                                 .variables
                                 .push(var);
@@ -259,6 +291,11 @@ pub enum DebugValue {
     NoVal,
 }
 
+enum HighPc {
+    Address(usize),
+    Length(usize),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     GimliError(gimli::Error),
@@ -319,6 +356,31 @@ fn get_location<R: Reader>(attr: &gimli::Attribute<R>, unit: &gimli::Unit<R>) ->
     None
 }
 
+fn get_flag<R: Reader>(attr: &gimli::Attribute<R>) -> bool {
+    match attr.value() {
+        gimli::AttributeValue::Flag(value) => value,
+        gimli::AttributeValue::Data1(value) => value != 0,
+        gimli::AttributeValue::Data2(value) => value != 0,
+        gimli::AttributeValue::Data4(value) => value != 0,
+        gimli::AttributeValue::Data8(value) => value != 0,
+        gimli::AttributeValue::Udata(value) => value != 0,
+        gimli::AttributeValue::Sdata(value) => value != 0,
+        _ => false,
+    }
+}
+
+fn get_high_pc<R: Reader>(attr: &gimli::Attribute<R>) -> Option<HighPc> {
+    match attr.value() {
+        gimli::AttributeValue::Addr(value) => Some(HighPc::Address(value.try_into().ok()?)),
+        gimli::AttributeValue::Data1(value) => Some(HighPc::Length(value.try_into().ok()?)),
+        gimli::AttributeValue::Data2(value) => Some(HighPc::Length(value.try_into().ok()?)),
+        gimli::AttributeValue::Data4(value) => Some(HighPc::Length(value.try_into().ok()?)),
+        gimli::AttributeValue::Data8(value) => Some(HighPc::Length(value.try_into().ok()?)),
+        gimli::AttributeValue::Udata(value) => Some(HighPc::Length(value.try_into().ok()?)),
+        _ => None,
+    }
+}
+
 // based on dwarf_dump.rs
 fn get_attr_value<R: Reader>(
     attr: &gimli::Attribute<R>,
@@ -356,14 +418,17 @@ fn get_attr_value<R: Reader>(
             write!(w, "0x{:08x}", value)?;
             dump_file_index(w, value, unit, dwarf)?;
             Ok(DebugValue::Str(w.to_string()))
-        },
+        }
         gimli::AttributeValue::DebugLineStrRef(offset) => {
             if let Ok(s) = dwarf.debug_line_str.get_str(offset) {
                 Ok(DebugValue::Str(format!("{}", s.to_string_lossy()?)))
             } else {
-                Ok(DebugValue::Str(format!("<.debug_line_str+0x{:08x}>", offset.0)))
+                Ok(DebugValue::Str(format!(
+                    "<.debug_line_str+0x{:08x}>",
+                    offset.0
+                )))
             }
-        },
+        }
         _ => Ok(DebugValue::NoVal),
     }
 }
@@ -614,7 +679,7 @@ fn dump_op<R: Reader, W: Write>(
         | gimli::Operation::PushObjectAddress
         | gimli::Operation::TLS
         | gimli::Operation::CallFrameCFA
-        | gimli::Operation::StackValue => {},
+        | gimli::Operation::StackValue => {}
         gimli::Operation::WasmGlobal { index: _ }
         | gimli::Operation::WasmLocal { index: _ }
         | gimli::Operation::WasmStack { index: _ } => {}
